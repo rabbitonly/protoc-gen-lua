@@ -22,10 +22,10 @@ local ipairs = ipairs
 local error = error
 local print = print
 
-local pb = require "pb"
-local encoder = require "encoder"
-local wire_format = require "wire_format"
-module "decoder"
+local pb = require "protobuf.pb"
+local encoder = require "protobuf.encoder"
+local wire_format = require "protobuf.wire_format"
+local decoder = {}
 
 local _DecodeVarint = pb.varint_decoder
 local _DecodeSignedVarint = pb.signed_varint_decoder
@@ -33,13 +33,16 @@ local _DecodeSignedVarint = pb.signed_varint_decoder
 local _DecodeVarint32 = pb.varint_decoder
 local _DecodeSignedVarint32 = pb.signed_varint_decoder
 
-ReadTag = pb.read_tag
+local _DecodeVarint64 = pb.varint_decoder64
+local _DecodeSignedVarint64 = pb.signed_varint_decoder64
+
+decoder.ReadTag = pb.read_tag
 
 local function _SimpleDecoder(wire_type, decode_value)
     return function(field_number, is_repeated, is_packed, key, new_default)
         if is_packed then
             local DecodeVarint = _DecodeVarint
-            return function (buffer, pos, pend, message, field_dict)
+            return function(buffer, pos, pend, message, field_dict)
                 local value = field_dict[key]
                 if value == nil then
                     value = new_default(message)
@@ -49,7 +52,7 @@ local function _SimpleDecoder(wire_type, decode_value)
                 endpoint, pos = DecodeVarint(buffer, pos)
                 endpoint = endpoint + pos
                 if endpoint > pend then
-                    error('Truncated message.')
+                    error("Truncated message.")
                 end
                 local element
                 while pos < endpoint do
@@ -58,7 +61,7 @@ local function _SimpleDecoder(wire_type, decode_value)
                 end
                 if pos > endpoint then
                     value:remove(#value)
-                    error('Packed element was truncated.')
+                    error("Packed element was truncated.")
                 end
                 return pos
             end
@@ -76,20 +79,20 @@ local function _SimpleDecoder(wire_type, decode_value)
                     local element, new_pos = decode_value(buffer, pos)
                     value:append(element)
                     pos = new_pos + tag_len
-                    if sub(buffer, new_pos+1, pos) ~= tag_bytes or new_pos >= pend then
+                    if sub(buffer, new_pos + 1, pos) ~= tag_bytes or new_pos >= pend then
                         if new_pos > pend then
-                            error('Truncated message.')
+                            error("Truncated message.")
                         end
                         return new_pos
                     end
                 end
             end
         else
-            return function (buffer, pos, pend, message, field_dict)
+            return function(buffer, pos, pend, message, field_dict)
                 field_dict[key], pos = decode_value(buffer, pos)
                 if pos > pend then
                     field_dict[key] = nil
-                    error('Truncated message.')
+                    error("Truncated message.")
                 end
                 return pos
             end
@@ -98,7 +101,7 @@ local function _SimpleDecoder(wire_type, decode_value)
 end
 
 local function _ModifiedDecoder(wire_type, decode_value, modify_value)
-    local InnerDecode = function (buffer, pos)
+    local InnerDecode = function(buffer, pos)
         local result, new_pos = decode_value(buffer, pos)
         return modify_value(result), new_pos
     end
@@ -120,29 +123,27 @@ local function _Boolean(value)
     return value ~= 0
 end
 
-Int32Decoder = _SimpleDecoder(wire_format.WIRETYPE_VARINT, _DecodeSignedVarint32)
-EnumDecoder = Int32Decoder
+decoder.Int32Decoder = _SimpleDecoder(wire_format.WIRETYPE_VARINT, _DecodeSignedVarint32)
+decoder.EnumDecoder = decoder.Int32Decoder
 
-Int64Decoder = _SimpleDecoder(wire_format.WIRETYPE_VARINT, _DecodeSignedVarint)
+decoder.Int64Decoder = _SimpleDecoder(wire_format.WIRETYPE_VARINT, _DecodeSignedVarint64)
 
-UInt32Decoder = _SimpleDecoder(wire_format.WIRETYPE_VARINT, _DecodeVarint32)
-UInt64Decoder = _SimpleDecoder(wire_format.WIRETYPE_VARINT, _DecodeVarint)
+decoder.UInt32Decoder = _SimpleDecoder(wire_format.WIRETYPE_VARINT, _DecodeVarint32)
+decoder.UInt64Decoder = _SimpleDecoder(wire_format.WIRETYPE_VARINT, _DecodeVarint64)
 
-SInt32Decoder = _ModifiedDecoder(wire_format.WIRETYPE_VARINT, _DecodeVarint32, wire_format.ZigZagDecode32)
-SInt64Decoder = _ModifiedDecoder(wire_format.WIRETYPE_VARINT, _DecodeVarint, wire_format.ZigZagDecode64)
+decoder.SInt32Decoder = _ModifiedDecoder(wire_format.WIRETYPE_VARINT, _DecodeVarint32, wire_format.ZigZagDecode32)
+decoder.SInt64Decoder = _ModifiedDecoder(wire_format.WIRETYPE_VARINT, _DecodeVarint64, wire_format.ZigZagDecode64)
 
-Fixed32Decoder  = _StructPackDecoder(wire_format.WIRETYPE_FIXED32, 4, string.byte('I'))
-Fixed64Decoder  = _StructPackDecoder(wire_format.WIRETYPE_FIXED64, 8, string.byte('Q'))
-SFixed32Decoder = _StructPackDecoder(wire_format.WIRETYPE_FIXED32, 4, string.byte('i'))
-SFixed64Decoder = _StructPackDecoder(wire_format.WIRETYPE_FIXED64, 8, string.byte('q'))
-FloatDecoder    = _StructPackDecoder(wire_format.WIRETYPE_FIXED32, 4, string.byte('f'))
-DoubleDecoder   = _StructPackDecoder(wire_format.WIRETYPE_FIXED64, 8, string.byte('d'))
+decoder.Fixed32Decoder = _StructPackDecoder(wire_format.WIRETYPE_FIXED32, 4, string.byte("I"))
+decoder.Fixed64Decoder = _StructPackDecoder(wire_format.WIRETYPE_FIXED64, 8, string.byte("Q"))
+decoder.SFixed32Decoder = _StructPackDecoder(wire_format.WIRETYPE_FIXED32, 4, string.byte("i"))
+decoder.SFixed64Decoder = _StructPackDecoder(wire_format.WIRETYPE_FIXED64, 8, string.byte("q"))
+decoder.FloatDecoder = _StructPackDecoder(wire_format.WIRETYPE_FIXED32, 4, string.byte("f"))
+decoder.DoubleDecoder = _StructPackDecoder(wire_format.WIRETYPE_FIXED64, 8, string.byte("d"))
 
+decoder.BoolDecoder = _ModifiedDecoder(wire_format.WIRETYPE_VARINT, _DecodeVarint, _Boolean)
 
-BoolDecoder = _ModifiedDecoder(wire_format.WIRETYPE_VARINT, _DecodeVarint, _Boolean)
-
-
-function StringDecoder(field_number, is_repeated, is_packed, key, new_default)
+function decoder.StringDecoder(field_number, is_repeated, is_packed, key, new_default)
     local DecodeVarint = _DecodeVarint
     local sub = string.sub
     --    local unicode = unicode
@@ -150,7 +151,7 @@ function StringDecoder(field_number, is_repeated, is_packed, key, new_default)
     if is_repeated then
         local tag_bytes = encoder.TagBytes(field_number, wire_format.WIRETYPE_LENGTH_DELIMITED)
         local tag_len = #tag_bytes
-        return function (buffer, pos, pend, message, field_dict)
+        return function(buffer, pos, pend, message, field_dict)
             local value = field_dict[key]
             if value == nil then
                 value = new_default(message)
@@ -161,48 +162,7 @@ function StringDecoder(field_number, is_repeated, is_packed, key, new_default)
                 size, pos = DecodeVarint(buffer, pos)
                 new_pos = pos + size
                 if new_pos > pend then
-                    error('Truncated string.')
-                end
-                value:append(sub(buffer, pos+1, new_pos))
-                pos = new_pos + tag_len
-                if sub(buffer, new_pos + 1, pos) ~= tag_bytes or new_pos == pend then
-                    return new_pos
-                end
-            end
-        end
-    else
-        return function (buffer, pos, pend, message, field_dict)
-            local size, new_pos
-            size, pos = DecodeVarint(buffer, pos)
-            new_pos = pos + size
-            if new_pos > pend then
-                error('Truncated string.')
-            end
-            field_dict[key] = sub(buffer, pos + 1, new_pos)
-            return new_pos
-        end
-    end
-end
-
-function BytesDecoder(field_number, is_repeated, is_packed, key, new_default)
-    local DecodeVarint = _DecodeVarint
-    local sub = string.sub
-    assert(not is_packed)
-    if is_repeated then
-        local tag_bytes = encoder.TagBytes(field_number, wire_format.WIRETYPE_LENGTH_DELIMITED)
-        local tag_len = #tag_bytes
-        return function (buffer, pos, pend, message, field_dict)
-            local value = field_dict[key]
-            if value == nil then
-                value = new_default(message)
-                field_dict[key] = value
-            end
-            while 1 do
-                local size, new_pos
-                size, pos = DecodeVarint(buffer, pos)
-                new_pos = pos + size
-                if new_pos > pend then
-                    error('Truncated string.')
+                    error("Truncated string.")
                 end
                 value:append(sub(buffer, pos + 1, new_pos))
                 pos = new_pos + tag_len
@@ -217,7 +177,7 @@ function BytesDecoder(field_number, is_repeated, is_packed, key, new_default)
             size, pos = DecodeVarint(buffer, pos)
             new_pos = pos + size
             if new_pos > pend then
-                error('Truncated string.')
+                error("Truncated string.")
             end
             field_dict[key] = sub(buffer, pos + 1, new_pos)
             return new_pos
@@ -225,15 +185,14 @@ function BytesDecoder(field_number, is_repeated, is_packed, key, new_default)
     end
 end
 
-function MessageDecoder(field_number, is_repeated, is_packed, key, new_default)
+function decoder.BytesDecoder(field_number, is_repeated, is_packed, key, new_default)
     local DecodeVarint = _DecodeVarint
     local sub = string.sub
-
     assert(not is_packed)
     if is_repeated then
         local tag_bytes = encoder.TagBytes(field_number, wire_format.WIRETYPE_LENGTH_DELIMITED)
         local tag_len = #tag_bytes
-        return function (buffer, pos, pend, message, field_dict)
+        return function(buffer, pos, pend, message, field_dict)
             local value = field_dict[key]
             if value == nil then
                 value = new_default(message)
@@ -244,10 +203,52 @@ function MessageDecoder(field_number, is_repeated, is_packed, key, new_default)
                 size, pos = DecodeVarint(buffer, pos)
                 new_pos = pos + size
                 if new_pos > pend then
-                    error('Truncated message.')
+                    error("Truncated string.")
+                end
+                value:append(sub(buffer, pos + 1, new_pos))
+                pos = new_pos + tag_len
+                if sub(buffer, new_pos + 1, pos) ~= tag_bytes or new_pos == pend then
+                    return new_pos
+                end
+            end
+        end
+    else
+        return function(buffer, pos, pend, message, field_dict)
+            local size, new_pos
+            size, pos = DecodeVarint(buffer, pos)
+            new_pos = pos + size
+            if new_pos > pend then
+                error("Truncated string.")
+            end
+            field_dict[key] = sub(buffer, pos + 1, new_pos)
+            return new_pos
+        end
+    end
+end
+
+function decoder.MessageDecoder(field_number, is_repeated, is_packed, key, new_default)
+    local DecodeVarint = _DecodeVarint
+    local sub = string.sub
+
+    assert(not is_packed)
+    if is_repeated then
+        local tag_bytes = encoder.TagBytes(field_number, wire_format.WIRETYPE_LENGTH_DELIMITED)
+        local tag_len = #tag_bytes
+        return function(buffer, pos, pend, message, field_dict)
+            local value = field_dict[key]
+            if value == nil then
+                value = new_default(message)
+                field_dict[key] = value
+            end
+            while 1 do
+                local size, new_pos
+                size, pos = DecodeVarint(buffer, pos)
+                new_pos = pos + size
+                if new_pos > pend then
+                    error("Truncated message.")
                 end
                 if value:add():_InternalParse(buffer, pos, new_pos) ~= new_pos then
-                    error('Unexpected end-group tag.')
+                    error("Unexpected end-group tag.")
                 end
                 pos = new_pos + tag_len
                 if sub(buffer, new_pos + 1, pos) ~= tag_bytes or new_pos == pend then
@@ -256,7 +257,7 @@ function MessageDecoder(field_number, is_repeated, is_packed, key, new_default)
             end
         end
     else
-        return function (buffer, pos, pend, message, field_dict)
+        return function(buffer, pos, pend, message, field_dict)
             local value = field_dict[key]
             if value == nil then
                 value = new_default(message)
@@ -266,10 +267,10 @@ function MessageDecoder(field_number, is_repeated, is_packed, key, new_default)
             size, pos = DecodeVarint(buffer, pos)
             new_pos = pos + size
             if new_pos > pend then
-                error('Truncated message.')
+                error("Truncated message.")
             end
             if value:_InternalParse(buffer, pos, new_pos) ~= new_pos then
-                error('Unexpected end-group tag.')
+                error("Unexpected end-group tag.")
             end
             return new_pos
         end
@@ -284,8 +285,8 @@ end
 
 function _SkipFixed64(buffer, pos, pend)
     pos = pos + 8
-    if pos > pend then 
-        error('Truncated message.')
+    if pos > pend then
+        error("Truncated message.")
     end
     return pos
 end
@@ -295,7 +296,7 @@ function _SkipLengthDelimited(buffer, pos, pend)
     size, pos = _DecodeVarint(buffer, pos)
     pos = pos + size
     if pos > pend then
-        error('Truncated message.')
+        error("Truncated message.")
     end
     return pos
 end
@@ -303,13 +304,13 @@ end
 function _SkipFixed32(buffer, pos, pend)
     pos = pos + 4
     if pos > pend then
-        error('Truncated message.')
+        error("Truncated message.")
     end
     return pos
 end
 
 function _RaiseInvalidWireType(buffer, pos, pend)
-    error('Tag had invalid wire type.')
+    error("Tag had invalid wire type.")
 end
 
 function _FieldSkipper()
@@ -321,17 +322,19 @@ function _FieldSkipper()
         _EndGroup,
         _SkipFixed32,
         _RaiseInvalidWireType,
-        _RaiseInvalidWireType,
+        _RaiseInvalidWireType
     }
 
---    wiretype_mask = wire_format.TAG_TYPE_MASK
+    --    wiretype_mask = wire_format.TAG_TYPE_MASK
     local ord = string.byte
     local sub = string.sub
 
-    return function (buffer, pos, pend, tag_bytes)
+    return function(buffer, pos, pend, tag_bytes)
         local wire_type = ord(sub(tag_bytes, 1, 1)) % 8 + 1
         return WIRETYPE_TO_SKIPPER[wire_type](buffer, pos, pend)
     end
 end
 
-SkipField = _FieldSkipper()
+decoder.SkipField = _FieldSkipper()
+
+return decoder
